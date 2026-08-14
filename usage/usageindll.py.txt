@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import ctypes
+import os
+import sys
+from ctypes import wintypes
+
+# ============ Configuration ============
+PASSWORD = "mysecret123"     # Password
+SIGNATURE_STR = "xxx"  # Signature string
+COMPRESS_LEVEL = 9           # zlib compression level 0-9 (0=none, 9=max)
+# ======================================
+
+# Load DLL
+def load_dll():
+    dll_path = os.path.join(os.path.dirname(__file__), "ZxpdStream", "ZxpdStream.Core.dll")
+    if not os.path.exists(dll_path):
+        raise FileNotFoundError(f"DLL not found: {dll_path}")
+    
+    dll = ctypes.WinDLL(dll_path)
+    
+    # Define function prototypes
+    dll.ZxpdEncryptFile.argtypes = [
+        wintypes.LPCWSTR,   # in_path
+        wintypes.LPCWSTR,   # password
+        wintypes.LPCWSTR,   # signature_str
+        ctypes.c_int,       # compress_level
+        ctypes.POINTER(ctypes.c_void_p),  # outputData
+        ctypes.POINTER(wintypes.DWORD)    # outputSize
+    ]
+    dll.ZxpdEncryptFile.restype = wintypes.BOOL
+    
+    dll.ZxpdDecryptFile.argtypes = [
+        wintypes.LPCWSTR,   # in_path
+        wintypes.LPCWSTR,   # password
+        wintypes.LPCWSTR,   # signature_str
+        ctypes.POINTER(ctypes.c_void_p),  # outputData
+        ctypes.POINTER(wintypes.DWORD)    # outputSize
+    ]
+    dll.ZxpdDecryptFile.restype = wintypes.BOOL
+    
+    dll.ZxpdFreeBuffer.argtypes = [ctypes.c_void_p]
+    dll.ZxpdFreeBuffer.restype = None
+    
+    return dll
+
+def encrypt_file(in_path: str, password: str, signature_str: str, level: int = COMPRESS_LEVEL) -> bytes:
+    """
+    Encrypt a file using ZxpdStream DLL
+    Returns: bytes: Encrypted data (MAGIC + SALT + ENCRYPTED_DATA + SIGNATURE)
+    """
+    print(f"Encrypting: {in_path}")
+    print(f"Compression level: {level} {'(none)' if level == 0 else ''}")
+    
+    dll = load_dll()
+    
+    # Prepare output buffers
+    output_data = ctypes.c_void_p()
+    output_size = wintypes.DWORD()
+    
+    # Call DLL function
+    result = dll.ZxpdEncryptFile(
+        in_path,
+        password,
+        signature_str,
+        level,
+        ctypes.byref(output_data),
+        ctypes.byref(output_size)
+    )
+    
+    if not result:
+        raise RuntimeError("Encryption failed")
+    
+    # Copy data from DLL buffer to Python bytes
+    data = ctypes.string_at(output_data, output_size.value)
+    
+    # Free DLL allocated memory
+    dll.ZxpdFreeBuffer(output_data)
+    
+    original_size = os.path.getsize(in_path)
+    encrypted_size = len(data)
+    ratio = (1 - encrypted_size / original_size) * 100 if original_size > 0 else 0
+    print(f"Encryption complete! Original: {original_size/1024/1024:.2f} MB, Encrypted: {encrypted_size/1024/1024:.2f} MB")
+    print(f"Compression ratio: {ratio:.1f}% {'(compressed)' if ratio > 0 else '(not compressed)'}")
+    
+    return data
+
+def decrypt_file(in_path: str, password: str, signature_str: str) -> bytes:
+    """
+    Decrypt a file using ZxpdStream DLL
+    Returns: bytes: Decrypted original data
+    Raises: RuntimeError: If decryption fails or signature verification fails
+    """
+    print(f"Decrypting: {in_path}")
+    
+    dll = load_dll()
+    
+    # Prepare output buffers
+    output_data = ctypes.c_void_p()
+    output_size = wintypes.DWORD()
+    
+    # Call DLL function
+    result = dll.ZxpdDecryptFile(
+        in_path,
+        password,
+        signature_str,
+        ctypes.byref(output_data),
+        ctypes.byref(output_size)
+    )
+    
+    if not result:
+        raise RuntimeError("Decryption failed - file may be tampered or signature mismatch")
+    
+    # Copy data from DLL buffer to Python bytes
+    data = ctypes.string_at(output_data, output_size.value)
+    
+    # Free DLL allocated memory
+    dll.ZxpdFreeBuffer(output_data)
+    
+    print(f"Decryption complete! Data size: {len(data)/1024/1024:.2f} MB")
+    return data
+
+# ============ Usage Example ============
+
+if __name__ == "__main__":
+    # Encrypt
+    encrypted_data = encrypt_file('DVPLEditorProo.ico', PASSWORD, SIGNATURE_STR, COMPRESS_LEVEL)
+    
+    # Save encrypted data
+    output_path = 'DVPLEditorProo.ico.zxpd'
+    with open(output_path, 'wb') as f:
+        f.write(encrypted_data)
+    print(f"Encrypted data saved to: {output_path}")
+    
+    # Decrypt
+    decrypted_data = decrypt_file('DVPLEditorProo.ico.zxpd', PASSWORD, SIGNATURE_STR)
+    
+    # Save decrypted data
+    output_path2 = 'DVPLEditorPro.ico'
+    with open(output_path2, 'wb') as f:
+        f.write(decrypted_data)
+    print(f"Decrypted data saved to: {output_path2}")
